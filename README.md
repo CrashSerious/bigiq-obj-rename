@@ -1,0 +1,1 @@
+#objRename script
