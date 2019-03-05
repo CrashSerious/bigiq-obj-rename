@@ -1,1 +1,1 @@
-#objRename script
+# objRename script
