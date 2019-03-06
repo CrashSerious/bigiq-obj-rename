@@ -64,9 +64,9 @@ tmsh show ltm pool field-fmt members | awk --posix  '/node-name/ {mem=$2} /addr/
 # monitors
 ##########################
 
-# get monitors from config file and skip any that already have the tag prepended
+# get monitors from config file and skip any monitors with tags and skip iapp created monitors
 # write monitors that we will rename to a file
-awk '/^ltm monitor/ && !/\/Common\/'$tag'-/,/^}/' $srcConfig > $filePath/mon/orig-monitors
+awk '/^ltm monitor/ && !/\/Common\/'$tag'-/ && !/\/Common\/.*\.app\//,/^}/' $srcConfig > $filePath/mon/orig-monitors
 
 if [ "$(cat $filePath/mon/orig-monitors | wc -l)" -gt 0 ] ; then
   # create new file for monitor names which will be updated
@@ -104,7 +104,7 @@ if [ "$(cat $filePath/mon/orig-monitors | wc -l)" -gt 0 ] ; then
   echo -e "\n# point pools at new monitors" >> $filePath/mon/new-tmshcommands
   awk '/^ltm monitor/ {gsub (/\/Common\//,"",$4);print $3,$4}' $filePath/mon/orig-monitors | while read type mon; do
     echo -ne "\r# checking for pools that use monitor $type $mon                              "
-    tmsh list ltm pool monitor | awk '/^ltm pool/ {gsub (/\/Common\//,"",$3); pool=$3} /^    monitor (.*{ |)'$mon'( |$| })/ {print "tmsh modify ltm pool",pool,"monitor '$tag'-'$mon'"} /^}/ {pool=""}' >> $filePath/mon/new-tmshcommands
+    tmsh list ltm pool monitor | awk '/^ltm pool/ && !/(\/Common\/|).*\.app\// {gsub (/\/Common\//,"",$3); pool=$3} /^    monitor (.*{ |)'$mon'( |$| })/ {if (pool != "") print "tmsh modify ltm pool",pool,"monitor '$tag'-'$mon'"} /^}/ {pool=""}' >> $filePath/mon/new-tmshcommands
   done
   echo -ne "\r# finished checking for pools that use renamed monitors                               \n"
 
@@ -172,7 +172,7 @@ if [ -f $filePath/ssl/orig-filenames ] && [ "$(cat $filePath/ssl/orig-filenames 
   # create config for new client-ssl profiles
   # get list of client-ssl profiles that need to be modified
   for file in $(cat $filePath/ssl/orig-filenames); do
-    tmsh list ltm profile client-ssl cert key chain | awk '/^ltm profile/ {prof=$4} /^    (cert|key|chain) '$file'( |$)/ {print prof}'
+    tmsh list ltm profile client-ssl cert key chain | awk '/^ltm profile/ && !/(\/Common\/|).*\.app\// {prof=$4} /^    (cert|key|chain) '$file'( |$)/ {if (prof) print prof}'
   done | sort -u >> $filePath/ssl/affected-clientssl
 
   # create config file for new client-ssl profiles
@@ -197,7 +197,7 @@ if [ -f $filePath/ssl/orig-filenames ] && [ "$(cat $filePath/ssl/orig-filenames 
   # update virtual servers with new client-ssl profiles
   echo "# update virtual servers with new client-ssl profiles" > $filePath/ssl/vs-tmshcommands
   for prof in $(cat $filePath/ssl/affected-clientssl); do
-    tmsh list ltm virtual profiles | awk '/^ltm virtual/ {vs=$3} / '$prof' {/ {print vs}' | while read vs; do
+    tmsh list ltm virtual profiles | awk '/^ltm virtual/ && !/(\/Common\/|).*\.app\// {vs=$3} / '$prof' {/ {if (vs) print vs} /^}/ {vs=""}' | while read vs; do
       profiles=$(tmsh list ltm virtual $vs profiles | awk '/^        .* {/,/^        }/' | awk '/ .* {/ {gsub (/'$prof'/,"'$tag'-'$prof'",$1); prof=$1} / context / {ctx=$2} /^        }/ {printf "%s { context %s } ", prof,ctx}')
 
       echo "tmsh modify ltm virtual $vs profiles replace-all-with { $profiles }" >> $filePath/ssl/vs-tmshcommands
@@ -227,7 +227,12 @@ if [ -f $filePath/ssl/orig-filenames ] && [ "$(cat $filePath/ssl/orig-filenames 
   echo -ne "\rSSL Profiles: Removing old ssl profiles - complete                                                                       \n"
 
   # certs and keys
-  for file in $(cat $filePath/ssl/orig-filenames); do
+  cp ssl/orig-filenames ssl/del-filenames
+  for file in $(tmsh list ltm profile client-ssl *.app/* cert key chain | awk '/^    (cert|key|chain)/ {if ($2 != "none") print $2}'); do 
+    sed -i 's/'$file'//' ssl/del-filenames
+  done
+
+  for file in $(cat $filePath/ssl/del-filenames); do
     if [[ "$file" == *"crt" ]] ; then
       cmd="tmsh delete sys crypto cert $file"
     else
@@ -252,13 +257,13 @@ fi
 
 # create config for new iRules with tag in name
 
-for rule in $(awk '/^ltm rule / {print $3}' $srcConfig); do
+for rule in $(awk '/^ltm rule / && !/(\/Common\/|).*\.app\// {print $3}' $srcConfig); do
   tmsh list ltm rule $rule 
 done > $filePath/rul/orig-irules
 
 if [ -f $filePath/rul/orig-irules ] && [ "$(cat $filePath/rul/orig-irules | wc -l)" -gt 0 ] ; then
 
-  awk '/^ltm rule/,/^ltm/ && !/rule/ {if ($0 !~ /^ltm/ || /^ltm rule/) print}' $srcConfig > $filePath/rul/orig-irules
+  awk '/^ltm rule/ && !/(\/Common\/|).*\.app\//,/^ltm/ && !/rule/ {if ($0 !~ /^ltm/ || /^ltm rule/) print}' $srcConfig > $filePath/rul/orig-irules
   cp $filePath/rul/orig-irules $filePath/rul/new-irules
 
   for rule in $(awk '/^ltm rule/ {gsub (/\/Common\//,"",$3); print $3}' $filePath/rul/orig-irules); do
@@ -275,7 +280,7 @@ if [ -f $filePath/rul/orig-irules ] && [ "$(cat $filePath/rul/orig-irules | wc -
   # update virtual servers with new iRules
   for rule in $(awk '/^ltm rule/ {gsub (/\/Common\//,"",$3);print $3}' $filePath/rul/orig-irules) ; do
     echo -ne "\r# checking for VSes that use iRule $rule                                                                                                "
-    for vs in $(tmsh list ltm virtual rules | awk '/^ltm virtual / {gsub (/\/Common\//,"",$3); vs=$3} /^        '$rule'( |$)/ {print vs}'); do
+    for vs in $(tmsh list ltm virtual rules | awk '/^ltm virtual/ && !/(\/Common\/|).*\.app\// {gsub (/\/Common\//,"",$3); vs=$3} /^        '$rule'( |$)/ {if (vs)print vs} /^}/ {vs=""}'); do
       rules=$(tmsh list ltm virtual $vs rules | awk '/^        .*( |$)/ {gsub (/'$rule'/,"'$tag'-'$rule'",$1); rule=$1} /^    }/ {printf "%s ", rule}')
       cmd="tmsh modify ltm virtual $vs rules { $rules }"
       returnStr="iRules: updating virtual $vs - $cmd"
@@ -288,7 +293,12 @@ if [ -f $filePath/rul/orig-irules ] && [ "$(cat $filePath/rul/orig-irules | wc -
   echo -ne "\riRules: finished updating virtual servers                                                                                                \n"
 
   # remove old iRules
-  for rule in $(awk '/^ltm rule/ {gsub (/\/Common\//,"",$3);print $3}' $filePath/rul/orig-irules) ; do
+  awk '/^ltm rule/ {print $3}' rul/orig-irules > rul/del-irules
+  for file in $(tmsh list ltm virtual *.app/* rules | awk '/^        .*/ {print $1}'); do 
+    sed -i 's/'$file'//' rul/del-irules
+  done
+
+  for rule in $(awk '/^ltm rule/ {gsub (/\/Common\//,"",$3);print $3}' $filePath/rul/del-irules) ; do
     cmd="tmsh delete ltm rule $rule"
     
     returnStr="iRules: deleting iRule $rule - $cmd"
