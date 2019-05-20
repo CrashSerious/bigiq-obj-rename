@@ -146,9 +146,12 @@ mkdir $filePath/ssl 2>/dev/null
 awk '/^sys file ssl-(cert|key)/,/^}/' $srcConfig | awk '/^sys file ssl-(cert|key)/ {gsub (/\/Common\//,"",$4); name=$4} /cache-path/ {file=$2} /^}/ {print name,file}' | while read oldName file; do
   returnStr="SSL Profiles: copying cert/key file $oldName to $filePath/ssl/$tag-$oldName"
   log_entry
-  cp $file $filePath/ssl/$tag-$oldName
-  # record original ssl filenames
-  echo $oldName >> $filePath/ssl/orig-filenames
+  if [[ "file" != "$tag"* ]] ; then
+    # only for certs and keys that are not already prepended with the tag
+    cp $file $filePath/ssl/$tag-$oldName
+    # record original ssl filenames
+    echo $oldName >> $filePath/ssl/orig-filenames
+  fi 
 done
 
 if [ -f $filePath/ssl/orig-filenames ] && [ "$(cat $filePath/ssl/orig-filenames | wc -l)" -gt 0 ] ; then
@@ -257,7 +260,7 @@ fi
 
 # create config for new iRules with tag in name
 
-for rule in $(awk '/^ltm rule / && !/(\/Common\/|).*\.app\// {print $3}' $srcConfig); do
+for rule in $(awk '/^ltm rule / !/\/Common\/'$tag'-/ && !/(\/Common\/|).*\.app\// {print $3}' $srcConfig); do
   tmsh list ltm rule $rule 
 done > $filePath/rul/orig-irules
 
